@@ -22,11 +22,57 @@ def find_match():
 
     return(site_link)
 
-def soup(site_link):
+def generate_batting_scorecard(scorecard):
+    player_names = []
+    amount_of_runs = []
+    how_out = []
+    for row in scorecard.tbody.find_all('tr'):
+
+        player = row.find('td').find('div', {'class':'bts'}).get_text()
+        runs = row.find('td', {'class':'sTD'}).get_text()
+        dismissal_info = row.find('div', {'class':'m-player'}).get_text().rstrip()
+        
+        player_names.append(player)
+        amount_of_runs.append(runs)
+        how_out.append(dismissal_info)
+
+    df = pd.DataFrame(data = {'player':player_names, 'runs':amount_of_runs, 'dismissal':how_out})
+    return df
+
+def generate_bowling_scorecard(scorecard):
+    player_names = []
+    overs = []
+    mdns = []
+    runs = []
+    wickets = []
+    econ = []
+    for row in scorecard.tbody.find_all('tr'):
+        bowling_data = row.find_all('td')
+        player = bowling_data[0].get_text()
+        overs_bowled = bowling_data[1].get_text()
+        mdns_bowled = bowling_data[2].get_text()
+        runs_conceded = bowling_data[3].get_text()
+        wickets_taken = bowling_data[4].get_text()
+        economy = bowling_data[7].get_text()
+
+        player_names.append(player)
+        overs.append(overs_bowled)
+        mdns.append(mdns_bowled)
+        runs.append(runs_conceded)
+        wickets.append(wickets_taken)
+        econ.append(economy)
+
+    df = pd.DataFrame(data = {'player':player_names, 'overs':overs, 'maidens':mdns, 'runs':runs, 'wickets':wickets, 'economy':econ})
+    return df
+        
+
+def find_total_and_extras(scorecard):
+    pass
+    
+
+def generate_dataframes(site_link):
     match_response = requests.get(site_link)
     matchsoup = Soup(match_response.text, 'html.parser')
-
-    print(matchsoup.prettify())
     
     teams = []
     i = 0
@@ -45,17 +91,48 @@ def soup(site_link):
     away_team = teams[1]
     print(f'Match: {home_team} (h) vs. {away_team} (a)')
 
-    scorecard_table = matchsoup.find('table', {'class':'table standm table-hover'})
+    print(' ==================== ')
+    
+    #Finding batting data
+    batting_tables = matchsoup.find_all('table', {'class':'table standm table-hover'})
+    batting_scorecard_one_ungen = batting_tables[0]
+    batting_scorecard_two_ungen = batting_tables[1]
 
-    players_to_add = []
-    for row in scorecard_table.tbody.find_all('tr'):
-        columns = row.find('td')
-        player = columns.find('div', {'class':'bts'})
-        players_to_add.append(player.get_text())
+    #Generating batting data frame
+    batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen)
+    batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen)
+    full_batting_scorecard = pd.concat([batting_scorecard_one, batting_scorecard_two])
+    print(full_batting_scorecard)
 
-    scorecard_df = pd.DataFrame(data = {'player':players_to_add})
-    print(scorecard_df)
+    print(' ==================== ')
+    
+    #Finding bowling data
+    bowling_tables = matchsoup.find_all('table', {'class':'table bowler-detail table-hover'})
+    bowling_scorecard_one_ungen = bowling_tables[0]
+    bowling_scorecard_two_ungen = bowling_tables[1]
+
+    #Generating bowling data frame
+    bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen)
+    bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen)
+    full_bowling_scorecard = pd.concat([bowling_scorecard_one, bowling_scorecard_two])
+    print(full_bowling_scorecard)
+    
+                          
+def run_app():
+    pass
+
+
 
 
 #site_link = find_match()
-soup('https://www.play-cricket.com/website/results/4583981')
+generate_dataframes('https://www.play-cricket.com/website/results/4598125')
+
+
+
+
+
+
+
+
+
+
