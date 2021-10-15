@@ -22,7 +22,16 @@ def find_match():
 
     return(site_link)
 
-def generate_batting_scorecard(scorecard):
+def generate_batting_scorecard(scorecard, match_infomation, x):
+    '''
+    Inputs: scorecard - Part of soup that contains scorecard infomation
+            match_infomation - Full match info dataframe
+            x - int, 1 or 2 - the number of the innings
+
+    Outputs dataframe of the batting scorecard
+    '''
+    teamname = match_infomation.loc[match_infomation.innings == x, 'teams'].values[0]
+    
     player_names = []
     amount_of_runs = []
     how_out = []
@@ -37,9 +46,21 @@ def generate_batting_scorecard(scorecard):
         how_out.append(dismissal_info)
 
     df = pd.DataFrame(data = {'player':player_names, 'runs':amount_of_runs, 'dismissal':how_out})
+    df['team'] = teamname
     return df
 
-def generate_bowling_scorecard(scorecard):
+
+def generate_bowling_scorecard(scorecard, match_infomation, x):
+    '''
+    Inputs: scorecard - Part of soup that contains scorecard infomation
+            match_infomation - Full match info dataframe
+            x - int, 1 or 2 - the number of the innings
+
+    Outputs dataframe of the bowling scorecard
+    '''
+    teamname = match_infomation.loc[match_infomation.innings != x, 'teams'].values[0]
+    #We choose != x as the bowling team is the team not batting
+  
     player_names = []
     overs = []
     mdns = []
@@ -63,35 +84,82 @@ def generate_bowling_scorecard(scorecard):
         econ.append(economy)
 
     df = pd.DataFrame(data = {'player':player_names, 'overs':overs, 'maidens':mdns, 'runs':runs, 'wickets':wickets, 'economy':econ})
+    df['team'] = teamname
     return df
         
 
-def find_total_and_extras(scorecard):
-    pass
-    
-
-def generate_dataframes(site_link):
-    match_response = requests.get(site_link)
-    matchsoup = Soup(match_response.text, 'html.parser')
-    
+def generate_match_information(matchsoup):
     teams = []
+    clubs = []
     i = 0
     while i < 2:
         team_club = matchsoup.find_all(class_='team-name')[i].text
         
         team_name = matchsoup.find_all(class_='team-info-2')[i].text
         team_name = team_name.lstrip().split('\n')[0]
-        
+
+        clubs.append(team_club)
         teams.append(f'{team_club}, {team_name}')
-        #teams.append(f'{team_club[i]}, {team_name[i]}')
-        #print(team.text)
         i+=1
     
     home_team = teams[0]
     away_team = teams[1]
-    print(f'Match: {home_team} (h) vs. {away_team} (a)')
+    return home_team, away_team, teams, clubs
 
-    print(' ==================== ')
+
+def order_of_innings(match_infomation):
+    '''Finds the order in which the innings took place'''
+    match_infomation['innings'] = None
+    
+    if (match_infomation['toss'][0] == 'Won the toss and elected to bat') or (match_infomation['toss'][1] == 'Won the toss and elected to bowl'):
+        match_infomation['innings'][0] = 1
+        match_infomation['innings'][1] = 2
+
+    elif (match_infomation['toss'][1] == 'Won the toss and elected to bat') or (match_infomation['toss'][0] == 'Won the toss and elected to bowl'):
+        match_infomation['innings'][0] = 2
+        match_infomation['innings'][1] = 1
+
+    return match_infomation
+
+
+def find_toss_information(matchsoup):
+    team_boxes = matchsoup.find_all('td', {'class':'col-md-4 text-center v-top'})
+
+    toss = []
+    for i in team_boxes:
+        toss_info = i.find('p', {'class':'team-info-3 adma'}).get_text()
+        toss.append(toss_info)
+    return toss
+
+def find_result_infomation(matchsoup):
+    '''
+    Finds who won and how they won (X by Y runs or Z by W wickets)
+    Returned in the form of a dataframe that will be merged with match infomation. Loser has None
+    '''
+    winner = matchsoup.find('p', {'class':'match-ttl'}).get_text().title().replace('Cc', 'CC')
+    how_won = matchsoup.find('div', {'class':'info mdont'}).get_text().lstrip().capitalize()
+
+    # Next steps => scrape runs, wickets, overs
+    
+    df = pd.DataFrame(data = {'teams':[winner], 'win':[how_won]})
+    return df
+                                    
+
+def generate_dataframes(site_link):
+    match_response = requests.get(site_link)
+    matchsoup = Soup(match_response.text, 'html.parser')
+    #print(matchsoup.prettify())
+    
+    print('===== MATCH INFORMATION =====')
+    home_team, away_team, teams, clubs = generate_match_information(matchsoup)
+    winner = find_result_infomation(matchsoup)
+    toss = find_toss_information(matchsoup)
+    match_infomation = pd.DataFrame(data = {'teams':clubs, 'toss': toss})
+    match_infomation = match_infomation.merge(winner, how = 'left', on = 'teams')
+    order_of_innings(match_infomation)
+    print(match_infomation)
+
+    print('===== BATTING =====')
     
     #Finding batting data
     batting_tables = matchsoup.find_all('table', {'class':'table standm table-hover'})
@@ -99,12 +167,12 @@ def generate_dataframes(site_link):
     batting_scorecard_two_ungen = batting_tables[1]
 
     #Generating batting data frame
-    batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen)
-    batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen)
+    batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen, match_infomation, 1)
+    batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen, match_infomation, 2)
     full_batting_scorecard = pd.concat([batting_scorecard_one, batting_scorecard_two])
     print(full_batting_scorecard)
 
-    print(' ==================== ')
+    print('===== BOWLING =====')
     
     #Finding bowling data
     bowling_tables = matchsoup.find_all('table', {'class':'table bowler-detail table-hover'})
@@ -112,8 +180,8 @@ def generate_dataframes(site_link):
     bowling_scorecard_two_ungen = bowling_tables[1]
 
     #Generating bowling data frame
-    bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen)
-    bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen)
+    bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen, match_infomation, 1)
+    bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen, match_infomation, 2)
     full_bowling_scorecard = pd.concat([bowling_scorecard_one, bowling_scorecard_two])
     print(full_bowling_scorecard)
     
