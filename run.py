@@ -22,15 +22,15 @@ def find_match():
 
     return(site_link)
 
-def generate_batting_scorecard(scorecard, match_infomation, x):
+def generate_batting_scorecard(scorecard, match_information, x):
     '''
-    Inputs: scorecard - Part of soup that contains scorecard infomation
-            match_infomation - Full match info dataframe
+    Inputs: scorecard - Part of soup that contains scorecard information
+            match_information - Full match info dataframe
             x - int, 1 or 2 - the number of the innings
 
     Outputs dataframe of the batting scorecard
     '''
-    teamname = match_infomation.loc[match_infomation.innings == x, 'teams'].values[0]
+    teamname = match_information.loc[match_information.innings == x, 'teams'].values[0]
     
     player_names = []
     amount_of_runs = []
@@ -50,15 +50,15 @@ def generate_batting_scorecard(scorecard, match_infomation, x):
     return df
 
 
-def generate_bowling_scorecard(scorecard, match_infomation, x):
+def generate_bowling_scorecard(scorecard, match_information, x):
     '''
-    Inputs: scorecard - Part of soup that contains scorecard infomation
-            match_infomation - Full match info dataframe
+    Inputs: scorecard - Part of soup that contains scorecard information
+            match_information - Full match info dataframe
             x - int, 1 or 2 - the number of the innings
 
     Outputs dataframe of the bowling scorecard
     '''
-    teamname = match_infomation.loc[match_infomation.innings != x, 'teams'].values[0]
+    teamname = match_information.loc[match_information.innings != x, 'teams'].values[0]
     #We choose != x as the bowling team is the team not batting
   
     player_names = []
@@ -107,19 +107,19 @@ def generate_match_information(matchsoup):
     return home_team, away_team, teams, clubs
 
 
-def order_of_innings(match_infomation):
+def order_of_innings(match_information):
     '''Finds the order in which the innings took place'''
-    match_infomation['innings'] = None
+    match_information['innings'] = None
     
-    if (match_infomation['toss'][0] == 'Won the toss and elected to bat') or (match_infomation['toss'][1] == 'Won the toss and elected to bowl'):
-        match_infomation['innings'][0] = 1
-        match_infomation['innings'][1] = 2
+    if (match_information['toss'][0] == 'Won the toss and elected to bat') or (match_information['toss'][1] == 'Won the toss and elected to bowl'):
+        match_information['innings'][0] = 1
+        match_information['innings'][1] = 2
 
-    elif (match_infomation['toss'][1] == 'Won the toss and elected to bat') or (match_infomation['toss'][0] == 'Won the toss and elected to bowl'):
-        match_infomation['innings'][0] = 2
-        match_infomation['innings'][1] = 1
+    elif (match_information['toss'][1] == 'Won the toss and elected to bat') or (match_information['toss'][0] == 'Won the toss and elected to bowl'):
+        match_information['innings'][0] = 2
+        match_information['innings'][1] = 1
 
-    return match_infomation
+    return match_information
 
 
 def find_toss_information(matchsoup):
@@ -131,19 +131,44 @@ def find_toss_information(matchsoup):
         toss.append(toss_info)
     return toss
 
-def find_result_infomation(matchsoup):
+def find_result_information(matchsoup, clubs):
     '''
     Finds who won and how they won (X by Y runs or Z by W wickets)
-    Returned in the form of a dataframe that will be merged with match infomation. Loser has None
+    Returned in the form of a dataframe that will be merged with match information. Loser has None
     '''
     winner = matchsoup.find('p', {'class':'match-ttl'}).get_text().title().replace('Cc', 'CC')
     how_won = matchsoup.find('div', {'class':'info mdont'}).get_text().lstrip().capitalize()
 
-    # Next steps => scrape runs, wickets, overs
+    print('- check from here -')
+
+    match_information = matchsoup.find_all('p', {'class': 'team-info-2'})
+
+    # len match_information = 6: the result is displayed 3 times
+    home_runs = match_information[0].get_text().split('/')[0][-7:].lstrip().rstrip()
+    home_wkts = match_information[0].get_text().split('/')[1][0:3].lstrip().rstrip()
+    home_ovrs = match_information[0].get_text().split('(')[1].split(')')[0].lstrip().rstrip()
+
+    away_runs = match_information[1].get_text().split('/')[0][-7:].lstrip().rstrip()
+    away_wkts = match_information[1].get_text().split('/')[1][0:3].lstrip().rstrip()
+    away_ovrs = match_information[1].get_text().split('(')[1].split(')')[0].lstrip().rstrip()
+
+    #Dealing with all outs
+    if home_wkts[0] == 'A':
+        home_wkts = 10
+    if away_wkts[0] == 'A':
+        away_wkts = 10
+
+    scores_df = pd.DataFrame(data = {'teams':clubs,
+                                     'runs':[home_runs, away_runs],
+                                     'wkts':[home_wkts, away_wkts],
+                                     'ovrs':[home_ovrs, away_ovrs]})
     
-    df = pd.DataFrame(data = {'teams':[winner], 'win':[how_won]})
-    return df
-                                    
+    # Next steps => scrape runs, wickets, overs
+    print('- to here -')
+    print(scores_df)
+    win_df = pd.DataFrame(data = {'teams':[winner], 'win':[how_won]})
+    return win_df, scores_df
+
 
 def generate_dataframes(site_link):
     match_response = requests.get(site_link)
@@ -152,12 +177,13 @@ def generate_dataframes(site_link):
     
     print('===== MATCH INFORMATION =====')
     home_team, away_team, teams, clubs = generate_match_information(matchsoup)
-    winner = find_result_infomation(matchsoup)
+    win_df, score_df = find_result_information(matchsoup, clubs)
     toss = find_toss_information(matchsoup)
-    match_infomation = pd.DataFrame(data = {'teams':clubs, 'toss': toss})
-    match_infomation = match_infomation.merge(winner, how = 'left', on = 'teams')
-    order_of_innings(match_infomation)
-    print(match_infomation)
+    match_information = pd.DataFrame(data = {'teams':clubs, 'toss': toss})
+    match_information = match_information.merge(win_df, how = 'left', on = 'teams')
+    match_information = match_information.merge(score_df, how = 'left', on = 'teams')
+    order_of_innings(match_information)
+    print(match_information)
 
     print('===== BATTING =====')
     
@@ -167,8 +193,8 @@ def generate_dataframes(site_link):
     batting_scorecard_two_ungen = batting_tables[1]
 
     #Generating batting data frame
-    batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen, match_infomation, 1)
-    batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen, match_infomation, 2)
+    batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen, match_information, 1)
+    batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen, match_information, 2)
     full_batting_scorecard = pd.concat([batting_scorecard_one, batting_scorecard_two])
     print(full_batting_scorecard)
 
@@ -180,12 +206,32 @@ def generate_dataframes(site_link):
     bowling_scorecard_two_ungen = bowling_tables[1]
 
     #Generating bowling data frame
-    bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen, match_infomation, 1)
-    bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen, match_infomation, 2)
+    bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen, match_information, 1)
+    bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen, match_information, 2)
     full_bowling_scorecard = pd.concat([bowling_scorecard_one, bowling_scorecard_two])
     print(full_bowling_scorecard)
-    
-                          
+
+    print('- dataframes generated -')
+
+    return match_information, full_batting_scorecard, full_bowling_scorecard
+
+def batting_mvp(match_information, full_batting_scorecard):
+    print('- finding batting mvps for each side -')
+    for i in match_information.index:
+        print(i)
+        j = match_information.teams[i]
+        k = int(match_information.runs[i])
+        
+        team_df = full_batting_scorecard[full_batting_scorecard.team == j].drop('team', axis = 1)
+        team_df = team_df.fillna(0)
+        for i in team_df.index:
+            if team_df.runs[i] == '':
+                team_df.runs[i] = 0
+        team_df.runs = team_df.runs.astype(int)
+        team_df['proportion'] = team_df['runs'] / k
+        print(team_df)
+      
+
 def run_app():
     pass
 
@@ -193,7 +239,8 @@ def run_app():
 
 
 #site_link = find_match()
-generate_dataframes('https://www.play-cricket.com/website/results/4598125')
+match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://www.play-cricket.com/website/results/4598125')
+batting_mvp(match_information, full_batting_scorecard)
 
 
 
