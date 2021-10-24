@@ -218,7 +218,6 @@ def generate_dataframes(site_link):
 def batting_mvp(match_information, full_batting_scorecard):
     print('- finding batting mvps for each side -')
     for i in match_information.index:
-        print(i)
         j = match_information.teams[i]
         k = int(match_information.runs[i])
         
@@ -231,7 +230,7 @@ def batting_mvp(match_information, full_batting_scorecard):
         team_df['proportion'] = team_df['runs'] / k
         print(team_df)
       
-
+        # 
 def run_app():
     pass
 
