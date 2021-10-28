@@ -3,6 +3,7 @@
 from bs4 import BeautifulSoup as Soup
 import requests
 import pandas as pd
+import numpy as np
 
 
 def find_match():
@@ -219,7 +220,35 @@ def batting_mvp(match_information, full_batting_scorecard):
     print('- finding batting mvps for each side -')
     for i in match_information.index:
         j = match_information.teams[i]
-        k = int(match_information.runs[i])
+        
+        # Multiplier is 20% for winning the match
+        if match_information.win[i] is not np.nan:
+            beta_win = 1.20
+        else:
+            beta_win = 1
+
+        k = int(match_information.runs[i]) # Team Runs
+
+        def is_not_out(row):
+            ''' the multiplier for a batter being not out = 20% '''
+            if row['dismissal'] == 'not out':
+                return 1.2
+            else:
+                return 1
+
+        def batting_milestone_marker(row):
+            if row['runs'] > 100:
+                row['multiplier'] *= 1.2 # 20% Hundred multiplier
+            elif row['runs'] > 50:
+                row['multiplier'] *= 1.1 # 10% Fifty multiplier
+            elif row['runs'] > 25:
+                row['multiplier'] *= 1.05 # 5% 25-run multiplier
+            return row['multiplier']
+
+        def standardise_multiplier(team_df):
+            sigma = sum(team_df['multiplier'])
+            team_df['multiplier'] = team_df['multiplier'] / max(team_df['multiplier'])
+            return team_df
         
         team_df = full_batting_scorecard[full_batting_scorecard.team == j].drop('team', axis = 1)
         team_df = team_df.fillna(0)
@@ -228,14 +257,17 @@ def batting_mvp(match_information, full_batting_scorecard):
                 team_df.runs[i] = 0
         team_df.runs = team_df.runs.astype(int)
         team_df['proportion'] = team_df['runs'] / k
+        team_df['multiplier'] = (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
+        team_df['multiplier'] = team_df.apply(lambda row: batting_milestone_marker(row), axis = 1)
+        team_df = standardise_multiplier(team_df)
         print(team_df)
-      
-        # 
+
+    return team_df
 def run_app():
     pass
 
 
-
+# TO MIGRATE TO RUN DOCUMENT
 
 #site_link = find_match()
 match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://www.play-cricket.com/website/results/4598125')
