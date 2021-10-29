@@ -4,7 +4,11 @@ from bs4 import BeautifulSoup as Soup
 import requests
 import pandas as pd
 import numpy as np
+import averages as av
 
+#############################
+######## Main Set Up ########
+#############################
 
 def find_match():
     """ Finds the web link for the match """
@@ -140,8 +144,6 @@ def find_result_information(matchsoup, clubs):
     winner = matchsoup.find('p', {'class':'match-ttl'}).get_text().title().replace('Cc', 'CC')
     how_won = matchsoup.find('div', {'class':'info mdont'}).get_text().lstrip().capitalize()
 
-    print('- check from here -')
-
     match_information = matchsoup.find_all('p', {'class': 'team-info-2'})
 
     # len match_information = 6: the result is displayed 3 times
@@ -164,9 +166,6 @@ def find_result_information(matchsoup, clubs):
                                      'wkts':[home_wkts, away_wkts],
                                      'ovrs':[home_ovrs, away_ovrs]})
     
-    # Next steps => scrape runs, wickets, overs
-    print('- to here -')
-    print(scores_df)
     win_df = pd.DataFrame(data = {'teams':[winner], 'win':[how_won]})
     return win_df, scores_df
 
@@ -174,7 +173,6 @@ def find_result_information(matchsoup, clubs):
 def generate_dataframes(site_link):
     match_response = requests.get(site_link)
     matchsoup = Soup(match_response.text, 'html.parser')
-    #print(matchsoup.prettify())
     
     print('===== MATCH INFORMATION =====')
     home_team, away_team, teams, clubs = generate_match_information(matchsoup)
@@ -186,8 +184,6 @@ def generate_dataframes(site_link):
     order_of_innings(match_information)
     print(match_information)
 
-    print('===== BATTING =====')
-    
     #Finding batting data
     batting_tables = matchsoup.find_all('table', {'class':'table standm table-hover'})
     batting_scorecard_one_ungen = batting_tables[0]
@@ -197,9 +193,6 @@ def generate_dataframes(site_link):
     batting_scorecard_one = generate_batting_scorecard(batting_scorecard_one_ungen, match_information, 1)
     batting_scorecard_two = generate_batting_scorecard(batting_scorecard_two_ungen, match_information, 2)
     full_batting_scorecard = pd.concat([batting_scorecard_one, batting_scorecard_two])
-    print(full_batting_scorecard)
-
-    print('===== BOWLING =====')
     
     #Finding bowling data
     bowling_tables = matchsoup.find_all('table', {'class':'table bowler-detail table-hover'})
@@ -210,14 +203,59 @@ def generate_dataframes(site_link):
     bowling_scorecard_one = generate_bowling_scorecard(bowling_scorecard_one_ungen, match_information, 1)
     bowling_scorecard_two = generate_bowling_scorecard(bowling_scorecard_two_ungen, match_information, 2)
     full_bowling_scorecard = pd.concat([bowling_scorecard_one, bowling_scorecard_two])
-    print(full_bowling_scorecard)
 
-    print('- dataframes generated -')
+    print('- batting + bowling dataframes generated -')
 
     return match_information, full_batting_scorecard, full_bowling_scorecard
 
-def batting_mvp(match_information, full_batting_scorecard):
+
+#############################
+## Finding the batting MVP ##
+#############################
+
+# Helper functions
+def player_average_comparison(df, average_batter_score):
+    df['average'] = average_batter_score
+    df['v_average'] = df['runs']/df['average']
+    df['score'] *= df['v_average']
+    df = df.drop(['average'], axis = 1)
+    return df
+
+def is_not_out(row):
+    ''' the multiplier for a batter being not out = 20% '''
+    if row['dismissal'] == 'not out':
+        return 1.2
+    else:
+        return 1
+
+def batting_milestone_marker(row):
+    if row['runs'] > 100:
+        row['score'] *= 1.2 # 20% Hundred multiplier
+    elif row['runs'] > 50:
+        row['score'] *= 1.1 # 10% Fifty multiplier
+    elif row['runs'] > 25:
+        row['score'] *= 1.05 # 5% 25-run multiplier
+    return row['score']
+
+def penalise_ducks(row):
+    if (row['runs'] == 0) and (row['dismissal'] not in ['not out','did not bat']):
+        row['score'] -= 1
+    return row['score']
+
+
+# Main processing function
+def batting_mvp(match_information, full_batting_scorecard, average_team_score, average_batter_score):
     print('- finding batting mvps for each side -')
+
+    k = sum(match_information.runs.astype(int))/2 # Average Runs per Innings (match)
+
+    # In order to see if a player performed better than average for their position
+    # we find what an average score is for their position, based on the number of
+    # runs scored in the match
+    average_score_ratio = k / average_team_score 
+    average_batter_score = [(i * average_score_ratio) for i in average_batter_score]
+
+    overall_df = pd.DataFrame()
     for i in match_information.index:
         j = match_information.teams[i]
         
@@ -226,29 +264,6 @@ def batting_mvp(match_information, full_batting_scorecard):
             beta_win = 1.20
         else:
             beta_win = 1
-
-        k = int(match_information.runs[i]) # Team Runs
-
-        def is_not_out(row):
-            ''' the multiplier for a batter being not out = 20% '''
-            if row['dismissal'] == 'not out':
-                return 1.2
-            else:
-                return 1
-
-        def batting_milestone_marker(row):
-            if row['runs'] > 100:
-                row['multiplier'] *= 1.2 # 20% Hundred multiplier
-            elif row['runs'] > 50:
-                row['multiplier'] *= 1.1 # 10% Fifty multiplier
-            elif row['runs'] > 25:
-                row['multiplier'] *= 1.05 # 5% 25-run multiplier
-            return row['multiplier']
-
-        def standardise_multiplier(team_df):
-            sigma = sum(team_df['multiplier'])
-            team_df['multiplier'] = team_df['multiplier'] / max(team_df['multiplier'])
-            return team_df
         
         team_df = full_batting_scorecard[full_batting_scorecard.team == j].drop('team', axis = 1)
         team_df = team_df.fillna(0)
@@ -257,12 +272,26 @@ def batting_mvp(match_information, full_batting_scorecard):
                 team_df.runs[i] = 0
         team_df.runs = team_df.runs.astype(int)
         team_df['proportion'] = team_df['runs'] / k
-        team_df['multiplier'] = (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
-        team_df['multiplier'] = team_df.apply(lambda row: batting_milestone_marker(row), axis = 1)
-        team_df = standardise_multiplier(team_df)
-        print(team_df)
+        team_df['score'] = (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
+        team_df['score'] = team_df.apply(lambda row: batting_milestone_marker(row), axis = 1)
+        team_df = player_average_comparison(team_df, average_batter_score)
+        team_df['score'] = team_df.apply(lambda row: penalise_ducks(row), axis = 1)
 
-    return team_df
+        team_df.index += 1
+        overall_df = pd.concat([overall_df, team_df])
+
+    overall_df.sort_values(by='score', ascending=False, inplace = True)
+    return overall_df
+
+def print_top_and_bottom_three_players(df, action):
+    top3 = df[0:3]
+    bottom3 = df[-3:]
+
+    print(f'\nThe most valuable players {action} are:')
+    print(df[df['score']!=0][0:3])
+    print(f'\nThe least valuable players {action} are:')
+    print(df[df['score']!=0][-3:])
+
 def run_app():
     pass
 
@@ -271,8 +300,12 @@ def run_app():
 
 #site_link = find_match()
 match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://www.play-cricket.com/website/results/4598125')
-batting_mvp(match_information, full_batting_scorecard)
 
+average_team_score, average_batter_score = av.batting_averages()
+
+batting_df = batting_mvp(match_information, full_batting_scorecard, average_team_score, average_batter_score)
+
+print_top_and_bottom_three_players(batting_df, 'batting')
 
 
 
