@@ -4,7 +4,9 @@ from bs4 import BeautifulSoup as Soup
 import requests
 import pandas as pd
 import numpy as np
-import averages as av
+from averages import batting_averages
+
+pd.options.mode.chained_assignment = None
 
 #############################
 ######## Main Set Up ########
@@ -214,7 +216,7 @@ def generate_dataframes(site_link):
 #############################
 
 # Helper functions
-def player_average_comparison(df, average_batter_score):
+def player_batting_average_comparison(df, average_batter_score):
     df['average'] = average_batter_score
     df['v_average'] = df['runs']/df['average']
     df['score'] *= df['v_average']
@@ -229,11 +231,11 @@ def is_not_out(row):
         return 1
 
 def batting_milestone_marker(row):
-    if row['runs'] > 100:
+    if row['runs'] > 99:
         row['score'] *= 1.2 # 20% Hundred multiplier
-    elif row['runs'] > 50:
+    elif row['runs'] > 49:
         row['score'] *= 1.1 # 10% Fifty multiplier
-    elif row['runs'] > 25:
+    elif row['runs'] > 24:
         row['score'] *= 1.05 # 5% 25-run multiplier
     return row['score']
 
@@ -274,7 +276,7 @@ def batting_mvp(match_information, full_batting_scorecard, average_team_score, a
         team_df['proportion'] = team_df['runs'] / k
         team_df['score'] = (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
         team_df['score'] = team_df.apply(lambda row: batting_milestone_marker(row), axis = 1)
-        team_df = player_average_comparison(team_df, average_batter_score)
+        team_df = player_batting_average_comparison(team_df, average_batter_score)
         team_df['score'] = team_df.apply(lambda row: penalise_ducks(row), axis = 1)
 
         team_df.index += 1
@@ -282,6 +284,139 @@ def batting_mvp(match_information, full_batting_scorecard, average_team_score, a
 
     overall_df.sort_values(by='score', ascending=False, inplace = True)
     return overall_df
+
+#############################
+## Finding the bowling MVP ##
+#############################
+
+# Helper functions
+
+def convert_overs_for_calculations(row):
+    '''
+    Input note: Overs should be a float.
+
+    This converts overs - written as 'Full overs'.'balls' into 'Full overs'.'proportion of over left'
+    which is required for any calculations involving overs.
+    '''
+    if '.' in str(row['overs']):
+        balls_remainder = (str(row['overs'])).split('.')[1]
+
+        percent_remained = round(int(balls_remainder)/6, 3)
+        overs_int = int(float(row['overs']))
+
+        return overs_int + percent_remained
+    else:
+        return row['overs']
+
+def player_bowling_average_comparison(df, match_average):
+    df['average'] = match_average
+    df['v_average'] = None
+    for i in df.index:
+        if df['wickets'][i] != 0:
+            df['v_average'][i] = ( df['runs'][i] / df['wickets'][i] ) / df['average'][i]
+        else:
+            df['v_average'][i] = df['runs'][i] / df['average'][i]
+        
+    df['score'] *= df['v_average']
+    df = df.drop(['average'], axis = 1)
+    return df
+
+def player_economy_comparison(df, match_economy):
+    df['av_econ'] = match_economy
+    df['v_av_econ'] = (df['runs']/df['overs']) / df['av_econ']
+    df = df.drop(['av_econ'], axis = 1)
+    return df
+
+def expensive_no_fer(row, team_runs_conceded):
+    ''' If a bowler doesn't take a wicket, and concedes more than 25% of the team runs, they're penalised '''
+    if (row['runs'] > (0.25*team_runs_conceded)) & (row['wickets'] == 0):
+        return 0.8
+    else:
+        return 1
+
+def bowling_milestone_marker_wickets(row):
+    if row['wickets'] >= 7:
+        row['score'] *= 1.2 # 20% 7-fer multiplier
+    elif row['runs'] >= 5:
+        row['score'] *= 1.1 # 10% 5-fer multiplier
+    elif row['runs'] >= 3:
+        row['score'] *= 1.05 # 5% 3-fer multiplier
+    return row['score']
+
+def bowling_milestone_marker_maidens(row):
+    if (row['maidens'] / row['overs']) >= 0.75:
+        row['score'] *= 1.1 # 20% 7-fer multiplier
+    elif (row['maidens'] / row['overs']) >= 0.5:
+        row['score'] *= 1.05 # 10% 5-fer multiplier
+    return row['score']
+
+# Main processing function
+def bowling_mvp(match_information, full_bowling_scorecard):
+    print('- finding bowling mvps for each side -')
+
+    full_bowling_scorecard.runs = full_bowling_scorecard.runs.astype(int)
+    full_bowling_scorecard.wickets = full_bowling_scorecard.wickets.astype(int)
+    full_bowling_scorecard.maidens = full_bowling_scorecard.maidens.astype(int)
+
+    match_runs = sum(match_information.runs.astype(int))/2 # Average Runs per Innings (match)
+    match_wickets = sum(match_information.wkts.astype(int))
+    if match_wickets != 0:
+        match_average = match_runs / match_wickets
+    else:
+        match_average = match_runs
+
+    match_overs = 0
+    for i in match_information.index:
+        if '.' in str(match_information['ovrs'][i]):
+            balls_remainder = (str(match_information['ovrs'][i])).split('.')[1]
+            percent_remained = round(int(balls_remainder)/6, 3)
+            overs_int = int(float(match_information['ovrs'][i]))
+            match_overs += overs_int + percent_remained
+        else:
+            match_overs += match_overs
+            
+    match_economy = match_runs / match_overs
+
+    # In order to see if a player performed better what would be expected,
+    # we use the match bowling average and economy
+
+    overall_df = pd.DataFrame()
+    for i in match_information.index:
+        j = match_information.teams[i]
+        
+        # Multiplier is 20% for winning the match
+        if match_information.win[i] is not np.nan:
+            beta_win = 1.20
+        else:
+            beta_win = 1
+        
+        team_df = full_bowling_scorecard[full_bowling_scorecard.team == j].drop('team', axis = 1)
+        team_df['overs_raw'] = team_df['overs']
+        team_df['overs'] = team_df.apply(lambda row: convert_overs_for_calculations(row), axis = 1)
+        team_df['overs'] = team_df.overs.astype(float)
+        
+        team_economy_rate = sum(team_df['runs'].astype(int)) / sum(team_df['overs'].astype(int))
+        team_df.runs = team_df.runs.astype(int)
+
+        team_df['proportion_runs'] = team_df['runs'] / sum(team_df['runs'].astype(int))
+        team_df['proportion_wkts'] = team_df['wickets'].astype(int) / sum(team_df['wickets'].astype(int))
+        
+        team_df['score'] = (team_df.apply(lambda row: expensive_no_fer(row, sum(team_df['runs'].astype(int))), axis = 1)) * beta_win + team_df['proportion_wkts']
+        team_df['score'] = team_df.apply(lambda row: bowling_milestone_marker_wickets(row), axis = 1)
+        team_df['score'] = team_df.apply(lambda row: bowling_milestone_marker_maidens(row), axis = 1)
+
+        player_bowling_average_comparison(team_df, match_average)
+        player_economy_comparison(team_df, match_economy)
+        
+        team_df.index += 1
+        overall_df = pd.concat([overall_df, team_df])
+
+    overall_df.sort_values(by='score', ascending=False, inplace = True)
+    return overall_df
+
+#############################
+######## End Outputs ########
+#############################
 
 def print_top_and_bottom_three_players(df, action):
     top3 = df[0:3]
@@ -301,17 +436,11 @@ def run_app():
 #site_link = find_match()
 match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://www.play-cricket.com/website/results/4598125')
 
-average_team_score, average_batter_score = av.batting_averages()
-
+average_team_score, average_batter_score = batting_averages()
 batting_df = batting_mvp(match_information, full_batting_scorecard, average_team_score, average_batter_score)
-
 print_top_and_bottom_three_players(batting_df, 'batting')
 
-
-
-
-
-
-
+bowling_df = bowling_mvp(match_information, full_bowling_scorecard)
+print_top_and_bottom_three_players(bowling_df, 'bowling')
 
 
