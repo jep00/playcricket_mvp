@@ -14,19 +14,13 @@ pd.options.mode.chained_assignment = None
 
 def find_match():
     """ Finds the web link for the match """
-    check = False
-    while check is False:
-        match_id = input("Play cricket match ID: ")
-        if len(match_id) > 10:
-            # Assume they used the entire link
-            site_link = match_id
-        else:
-            # Assume they used the match identifier
-            site_link = f'https://www.play-cricket.com/website/results/{match_id}'
-        is_check = input(f'Check the site link: {site_link}\nIs this correct? y/n: ')
-        if is_check.lower()[0] == 'y':
-            check = True
-
+    match_id = input("Play cricket match ID: ")
+    if len(match_id) > 10:
+        # Assume they used the entire link
+        site_link = match_id
+    else:
+        # Assume they used the match identifier
+        site_link = f'https://www.play-cricket.com/website/results/{match_id}'
     return(site_link)
 
 def generate_batting_scorecard(scorecard, match_information, x):
@@ -37,6 +31,7 @@ def generate_batting_scorecard(scorecard, match_information, x):
 
     Outputs dataframe of the batting scorecard
     '''
+    
     teamname = match_information.loc[match_information.innings == x, 'teams'].values[0]
     
     player_names = []
@@ -118,11 +113,11 @@ def order_of_innings(match_information):
     '''Finds the order in which the innings took place'''
     match_information['innings'] = None
     
-    if (match_information['toss'][0] == 'Won the toss and elected to bat') or (match_information['toss'][1] == 'Won the toss and elected to bowl'):
+    if (match_information['toss'][0] in ['Won the toss and elected to bat', 'Batted first', 'Won the toss']) or (match_information['toss'][1] == 'Won the toss and elected to field'):
         match_information['innings'][0] = 1
         match_information['innings'][1] = 2
 
-    elif (match_information['toss'][1] == 'Won the toss and elected to bat') or (match_information['toss'][0] == 'Won the toss and elected to bowl'):
+    elif (match_information['toss'][1] in ['Won the toss and elected to bat', 'Batted first', 'Won the toss']) or (match_information['toss'][0] == 'Won the toss and elected to field'):
         match_information['innings'][0] = 2
         match_information['innings'][1] = 1
 
@@ -217,7 +212,12 @@ def generate_dataframes(site_link):
 
 # Helper functions
 def player_batting_average_comparison(df, average_batter_score):
-    df['average'] = average_batter_score
+    if len(df) == 11:
+        df['average'] = average_batter_score
+    else:
+        x = 11-len(df)
+        df['average'] = average_batter_score[:-x]
+
     df['v_average'] = df['runs']/df['average']
     df['score'] *= df['v_average']
     df = df.drop(['average'], axis = 1)
@@ -231,17 +231,24 @@ def is_not_out(row):
         return 1
 
 def batting_milestone_marker(row):
-    if row['runs'] > 99:
-        row['score'] *= 1.2 # 20% Hundred multiplier
-    elif row['runs'] > 49:
-        row['score'] *= 1.1 # 10% Fifty multiplier
-    elif row['runs'] > 24:
-        row['score'] *= 1.05 # 5% 25-run multiplier
+    if row['runs'] >= 100:
+        row['score'] *= 2 # 20% Hundred multiplier
+    elif row['runs'] >= 50:
+        row['score'] *= 1.25 # 10% Fifty multiplier
+    elif row['runs'] >= 25:
+        row['score'] *= 1.1 # 5% 25-run multiplier
     return row['score']
 
 def penalise_ducks(row):
     if (row['runs'] == 0) and (row['dismissal'] not in ['not out','did not bat']):
-        row['score'] -= 1
+        if row['batpos'] in [1,2,3]:
+            row['score'] -= 1
+        if row['batpos'] in [4,5]:
+            row['score'] -= 0.8
+        if row['batpos'] in [6,7]:
+            row['score'] -= 0.6
+        if row['batpos'] in [8,9,10,11]:
+            row['score'] -= 0.4
     return row['score']
 
 
@@ -274,9 +281,10 @@ def batting_mvp(match_information, full_batting_scorecard, average_team_score, a
                 team_df.runs[i] = 0
         team_df.runs = team_df.runs.astype(int)
         team_df['proportion'] = team_df['runs'] / k
-        team_df['score'] = (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
+        team_df['score'] = 2 * (team_df.apply(lambda row: is_not_out(row), axis = 1)) * beta_win * team_df['proportion']
         team_df['score'] = team_df.apply(lambda row: batting_milestone_marker(row), axis = 1)
         team_df = player_batting_average_comparison(team_df, average_batter_score)
+        team_df['batpos'] = team_df.index + 1
         team_df['score'] = team_df.apply(lambda row: penalise_ducks(row), axis = 1)
 
         team_df.index += 1
@@ -321,36 +329,57 @@ def player_bowling_average_comparison(df, match_average):
     df = df.drop(['average'], axis = 1)
     return df
 
-def player_economy_comparison(df, match_economy):
-    df['av_econ'] = match_economy
-    df['v_av_econ'] = (df['runs']/df['overs']) / df['av_econ']
-    df['score'] *= df['v_av_econ']
-    df = df.drop(['av_econ'], axis = 1)
-    return df
+def player_economy_comparison(row, match_economy, match_overs):
+    # Economy is quite hard to use here due to small samples, but very important
+
+    # Bad bowling
+    if row['runs'] > row['overs'] * 12:
+        #12 rpo (2 runs per ball) is very bad
+        row['score'] *=  2
+    elif row['runs'] > row['overs'] * 6:
+        row['score'] *=  1.5
+
+    # Mediocre bowling
+    if row['runs'] > row['overs'] * 4:
+        #12 rpo (2 runs per ball) is very bad
+        row['score'] *=  1.25
+    elif row['runs'] > row['overs'] * 3:
+        row['score'] *=  1.1
+        
+    # Good bowling
+    elif row['runs'] < row['overs']:
+        row['score'] *= 1 / 1.5
+    elif row['runs'] < row['overs'] * 2:
+        row['score'] *= 1 / 1.25
+    elif row['runs'] < row['overs'] * 3:
+        row['score'] *= 1 / 1.1
+
+    else:
+        row['score'] *= 1
+
+    return row['score']
 
 def expensive_no_fer(row, team_runs_conceded):
-    ''' If a bowler doesn't take a wicket, and concedes more than 25% of the team runs, they're penalised '''
+    ''' If a bowler doesn't take a wicket, and concedes more than 30% of the team runs, they're penalised '''
     if (row['runs'] > (0.3*team_runs_conceded)) & (row['wickets'] == 0):
-        return 0.8
+        return 1/0.8
     else:
         return 1
 
 def bowling_milestone_marker_wickets(row):
-    if row['wickets'] >= 7:
-        row['score'] *= 1/3 # 30% 7-fer multiplier
-    elif row['wickets'] >= 5:
-        row['score'] *= 1/2
-    elif row['wickets'] >= 3:
-        row['score'] *= 1/1.5 # 10% 3-fer multiplier
-    elif row['wickets'] >= 1:
-        row['score'] *= 1/1.25 # 5% wicket multiplier
+    if row['wickets'] == 0:
+        row['score'] *= 1/0.95
+    else:
+        row['score'] *= 1/(row['wickets']*1.5)
     return row['score']
 
 def bowling_milestone_marker_maidens(row):
     if (row['maidens'] / row['overs']) >= 0.75:
-        row['score'] *= 1.1 # 20% 7-fer multiplier
+        row['score'] *= 1/1.3 # 30% if 75% or more overs were maidens
     elif (row['maidens'] / row['overs']) >= 0.5:
-        row['score'] *= 1.05 # 10% 5-fer multiplier
+        row['score'] *= 1/1.2 # 20% if 50% or more overs were maidens
+    elif (row['maidens'] / row['overs']) >= 0.25:
+        row['score'] *= 1/1.1 # 10% if 25% or more overs were maidens
     return row['score']
 
 # Main processing function
@@ -389,7 +418,7 @@ def bowling_mvp(match_information, full_bowling_scorecard):
         
         # Multiplier is 20% for winning the match
         if match_information.win[i] is not np.nan:
-            beta_win = 1.20
+            beta_win = 1/1.20
         else:
             beta_win = 1
         
@@ -402,14 +431,15 @@ def bowling_mvp(match_information, full_bowling_scorecard):
         team_df.runs = team_df.runs.astype(int)
 
         team_df['proportion_runs'] = team_df['runs'] / sum(team_df['runs'].astype(int))
-        team_df['proportion_wkts'] = team_df['wickets'].astype(int) / sum(team_df['wickets'].astype(int))
+        team_df['proportion_wkts'] = team_df['wickets'].astype(int) / match_wickets
         
         team_df['score'] = (team_df.apply(lambda row: expensive_no_fer(row, sum(team_df['runs'].astype(int))), axis = 1)) * beta_win + team_df['proportion_wkts']
         team_df['score'] = team_df.apply(lambda row: bowling_milestone_marker_wickets(row), axis = 1)
         team_df['score'] = team_df.apply(lambda row: bowling_milestone_marker_maidens(row), axis = 1)
+        team_df['score'] = team_df.apply(lambda row: player_economy_comparison(row, match_economy, match_overs), axis = 1)
 
         #player_bowling_average_comparison(team_df, match_average)
-        player_economy_comparison(team_df, match_economy)
+ #       player_economy_comparison(team_df, match_economy)
 
         team_df['score'] = [(1/x) if (x!=0) else 0 for x in team_df['score']]
         
@@ -433,20 +463,12 @@ def print_top_and_bottom_three_players(df, action):
     print(df[df['score']!=0][-3:][['player', 'score']])
 
 def run_app():
-    pass
+    site_link = find_match()
+    match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes(site_link)
 
+    average_team_score, average_batter_score = batting_averages()
+    batting_df = batting_mvp(match_information, full_batting_scorecard, average_team_score, average_batter_score)
+    print_top_and_bottom_three_players(batting_df, 'batting')
 
-# TO MIGRATE TO RUN DOCUMENT
-
-#site_link = find_match()
-match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://www.play-cricket.com/website/results/4598125')
-#match_information, full_batting_scorecard, full_bowling_scorecard = generate_dataframes('https://newlongton.play-cricket.com/website/results/4598155')
-
-average_team_score, average_batter_score = batting_averages()
-batting_df = batting_mvp(match_information, full_batting_scorecard, average_team_score, average_batter_score)
-print_top_and_bottom_three_players(batting_df, 'batting')
-
-bowling_df = bowling_mvp(match_information, full_bowling_scorecard)
-print_top_and_bottom_three_players(bowling_df, 'bowling')
-
-
+    bowling_df = bowling_mvp(match_information, full_bowling_scorecard)
+    print_top_and_bottom_three_players(bowling_df, 'bowling')

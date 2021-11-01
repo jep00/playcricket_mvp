@@ -1,0 +1,12 @@
+Ideas to implement ---
+
+
+// For the MVP Function //
+1/ Fielding points
+2/ Add functionality for dealing with balls faced, boundaries etc. when they are added
+3/ Similarly, with partnerships. If a player was in a 100 run partnership but only scored
+   10, they had a valuable input to the team (esp. tailenders)
+4/ Don't have arbitrary values. Create real valuability scores using past games
+
+// Other //
+1/ Web app using Django
